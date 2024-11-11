@@ -20,7 +20,6 @@ byte sw_state = 1; // Normally open contact (pullup)
 // LED strip switch
 
 #define LED_MODE_PIN 5
-byte uv_sense = 0;
 byte uv_state = 0;
 
 // Front panel (AMP CT connector, CT.1 = GND)
@@ -112,10 +111,6 @@ void setup() {
     digitalWrite(pin, 0);
   }
 
-  // Enable interrupt for UV sense
-
-  TIMSK2 |= _BV(TOIE2);
-
   // Fade up LED strip for test
 
   for (int j = 0; j < 256; j++) {
@@ -130,7 +125,24 @@ void setup() {
 };
 
 void loop() {
-  // On/off switch
+  // Front panel of the scanner (buttons and bicolor LED, just for show)
+
+  byte scan_state  = !digitalRead(BUT_1_PIN);
+  byte print_state = !digitalRead(BUT_2_PIN);
+  byte brush_state = !digitalRead(BUT_3_PIN);
+
+  // Scan  = Green
+  // Brush = Orange
+  // Print = Red
+
+  // Red is too intense compared to green, so only turn it on at 50% PWM
+
+  // digitalWrite(LED_RED_PIN, brush_state || print_state);
+  analogWrite(LED_RED_PIN, (brush_state || print_state) ? 128 : 0);
+
+  digitalWrite(LED_GREEN_PIN, brush_state || scan_state);
+
+  // LED strip on/off switch (bistable from the rotary encoder switch)
 
   byte sw = digitalRead(SW_PIN);
   byte pwm_change = (!sw && sw_state);
@@ -138,52 +150,28 @@ void loop() {
   sw_state = sw;
   digitalWrite(LED_BUILTIN, pwm_state);
 
-  // Front panel
-  byte scan_state  = !digitalRead(BUT_1_PIN);
-  byte print_state = !digitalRead(BUT_2_PIN);
-  byte brush_state = !digitalRead(BUT_3_PIN);
+  // Intensity setting: read rotary encoder and clamp it to 0..100
 
-  // Scan  = Green
-  // Brush = Yellow
-  // Print = Red
-  // digitalWrite(LED_RED_PIN, brush_state || print_state);
-  analogWrite(LED_RED_PIN, (brush_state || print_state) ? 128 : 0);
-  digitalWrite(LED_GREEN_PIN, brush_state || scan_state);
+  int rot = rotary.read() / 4;
+  // Encoder library reads 4 edges per click
 
-  // Intensity setting
-
-  int new_val = rotary.read() / 4;
-  int adj_val = (new_val < 0) ? 0 : ((new_val > 100) ? 100 : new_val);
-  if (adj_val != new_val)
-    rotary.write(adj_val * 4);
+  int clamped_rot = (rot < 0) ? 0 : ((rot > 100) ? 100 : rot);
+  if (clamped_rot != rot)
+    rotary.write(clamped_rot * 4);
 
   // UV mode sense
-  // Pin is sensed during timer interrupt for proper sync with PWM
-  // uv_sense is valid only if we're generating an active PWM cycle.
 
-  byte uv_new_state = (pwm_state && rot_state) ? uv_sense : 0;
-  byte uv_change = (uv_new_state != uv_state);
-  uv_state = uv_new_state;
+  byte uv = !digitalRead(LED_MODE_PIN);
+  byte uv_change = (uv != uv_state);
+  uv_state = uv;
 
   // Update outputs
 
-  if (pwm_change || uv_change || adj_val != rot_state) {
-    rot_state = adj_val;
-
-    // Output must be stable while we check the UV state
-    digitalWrite(PWM_PIN, pwm_state);
-    uv_state = !digitalRead(LED_MODE_PIN);
-
-    // Now set PWM
+  if (pwm_change || uv_change || clamped_rot != rot_state) {
+    rot_state = clamped_rot;
     analogWrite(PWM_PIN, (pwm_state ? map(rot_state, 0, 100, 0, 255) : 0));
     oled_show_state();
   }
 
   delay(100);
-}
-
-// Timer2 overflow is exactly at the middle of the ON phase of PWM, whatever the duty cycle.
-// So that's the place where we can sample the LED sense mode pin.
-ISR(TIMER2_OVF_vect) {
-  uv_sense = !digitalRead(LED_MODE_PIN);
 }
